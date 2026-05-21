@@ -34,6 +34,9 @@
         let lastKnownStatus = null;
         let isShopOpen = true; 
 
+        // متغيرات مؤقتة لحفظ البيانات قبل ما الزبون يدوس تأكيد بعد الواتساب
+        let pendingBooking = null;
+
         onValue(settingsRef, (snapshot) => {
             const settings = snapshot.val();
             if (settings && settings.shopStatus !== undefined) {
@@ -88,6 +91,7 @@
             }
         }
 
+        // الخطوة الأولى: تفتح الواتساب وتظهر زرار التأكيد النهائي
         window.requestBooking = function() {
             if (!isShopOpen) { alert('عذراً، المحل مغلق ولا يستقبل حجوزات الآن.'); return; }
 
@@ -114,40 +118,55 @@
 
             const serviceString = selectedServices.join(' + ');
 
-            const btn = document.getElementById('btn-request');
-            btn.innerText = 'جاري التأكيد...';
+            // حفظ البيانات مؤقتاً لحين العودة من الواتساب
+            pendingBooking = { name, phone, service: serviceString };
+
+            // فتح الواتساب أولاً
+            const targetWhatsAppNumber = "201091505674";
+            const messageBody = `👑 *طلب حجز جديد - صالون أفندينا* 👑\n\n` +
+                                `👤 *الاسم:* ${name}\n` +
+                                `📱 *رقم الهاتف:* ${phone}\n` +
+                                `✂️ *الخدمات المطلوبة:* ${serviceString}\n\n` +
+                                `⚠️ _برجاء العودة للموقع لتأكيد الدخول في الطابور_ ⚠️`;
+            const encodedMessage = encodeURIComponent(messageBody);
+            const whatsappUrl = `https://wa.me/${targetWhatsAppNumber}?text=${encodedMessage}`;
+            window.open(whatsappUrl, '_blank');
+
+            // إخفاء الحقول وإظهار زرار التأكيد النهائي بعد الإرسال
+            document.getElementById('inputs-container').classList.add('hidden');
+            document.getElementById('confirm-whatsapp-container').classList.remove('hidden');
+        };
+
+        // الخطوة الثانية: التسجيل الفعلي في الـ Firebase بعد ما الزبون يأكد إنه بعت الرسالة
+        window.confirmFinalBooking = function() {
+            if(!pendingBooking) { location.reload(); return; }
+
+            const btn = document.getElementById('btn-final-confirm');
+            btn.innerText = 'جاري حجز دورك وتحديث الطابور...';
             btn.disabled = true;
 
-            // تسجيل الزبون فوراً في الطابور على Firebase
+            // تسجيل البيانات رسمياً في قاعدة البيانات
             const newCustomerRef = push(queueRef);
             set(newCustomerRef, {
-                name: name,
-                phone: phone,
-                service: serviceString,
+                name: pendingBooking.name,
+                phone: pendingBooking.phone,
+                service: pendingBooking.service,
                 status: 'انتظار',
                 timestamp: Date.now()
             }).then(() => {
                 currentUserId = newCustomerRef.key;
                 localStorage.setItem('afandina_user_id', currentUserId);
-                localStorage.setItem('afandina_phone', phone);
-                checkCustomerStatus();
-
-                // إرسال رسالة الواتساب
-                const targetWhatsAppNumber = "201091505674";
-                const messageBody = `👑 *طلب حجز جديد - صالون أفندينا* 👑\n\n` +
-                                    `👤 *الاسم:* ${name}\n` +
-                                    `📱 *رقم الهاتف:* ${phone}\n` +
-                                    `✂️ *الخدمات المطلوبة:* ${serviceString}\n\n` +
-                                    `✨ _تم التسجيل في الطابور بنجاح_ ✨`;
-                const encodedMessage = encodeURIComponent(messageBody);
-                const whatsappUrl = `https://wa.me/${targetWhatsAppNumber}?text=${encodedMessage}`;
-                window.open(whatsappUrl, '_blank');
+                localStorage.setItem('afandina_phone', pendingBooking.phone);
                 
-                btn.innerText = 'تأكيد الحجز عبر واتساب';
-                btn.disabled = false;
+                // إعادة تنظيف الشاشة
+                document.getElementById('inputs-container').classList.remove('hidden');
+                document.getElementById('confirm-whatsapp-container').classList.add('hidden');
+                pendingBooking = null;
+
+                checkCustomerStatus();
             }).catch((error) => {
                 alert('حدث خطأ أثناء الحجز، برجاء المحاولة لاحقاً.');
-                btn.innerText = 'تأكيد الحجز عبر واتساب';
+                btn.innerText = 'إرسال مجدد وتأكيد';
                 btn.disabled = false;
             });
         };
@@ -309,7 +328,7 @@
         h1 { color: var(--gold); margin: 0; font-size: 2.5rem; letter-spacing: 2px;}
         p.manager { margin: 5px 0 0; font-size: 0.9rem; color: #aaa; }
         
-        .container { max-width: 600px; margin: 30px auto; padding: 20px; background-color: var(--gray); border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); width: 90%; }
+        .container { max-width: 600px; margin: 30px auto; padding: 20px; background-color: var(--gray); border-radius: 10px; box-shadow: 0 4px 15px rgba(0,0,0,0.5); width: 90%; box-sizing: border-box; }
         input[type="text"], input[type="tel"], input[type="password"], input[type="number"] { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid var(--gold); background-color: var(--dark); color: white; border-radius: 5px; box-sizing: border-box; font-family: inherit; font-size: 1rem; text-align: center;}
         
         .checkbox-group { text-align: right; background-color: var(--dark); border: 1px solid var(--gold); border-radius: 5px; padding: 15px; margin: 10px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; direction: rtl;}
@@ -379,19 +398,31 @@
             </div>
 
             <div id="step-1">
-                <input type="text" id="customer-name" placeholder="الاسم الكريم">
-                <input type="tel" id="customer-phone" placeholder="رقم التليفون (11 رقم)">
-                
-                <div id="customer-services" class="checkbox-group">
-                    <label class="checkbox-label"><input type="checkbox" value="حلاقة شعر"> حلاقة شعر</label>
-                    <label class="checkbox-label"><input type="checkbox" value="حلاقة دقن"> حلاقة دقن</label>
-                    <label class="checkbox-label"><input type="checkbox" value="استشوار ومكواة"> استشوار ومكواة</label>
-                    <label class="checkbox-label"><input type="checkbox" value="تنظيف بشرة VIP"> تنظيف بشرة VIP</label>
-                    <label class="checkbox-label"><input type="checkbox" value="صبغة شعر"> صبغة شعر</label>
-                    <label class="checkbox-label"><input type="checkbox" value="كيرلي أو ويفي"> كيرلي أو ويفي</label>
+                <div id="inputs-container">
+                    <input type="text" id="customer-name" placeholder="الاسم الكريم">
+                    <input type="tel" id="customer-phone" placeholder="رقم التليفون (11 رقم)">
+                    
+                    <div id="customer-services" class="checkbox-group">
+                        <label class="checkbox-label"><input type="checkbox" value="حلاقة شعر"> حلاقة شعر</label>
+                        <label class="checkbox-label"><input type="checkbox" value="حلاقة دقن"> حلاقة دقن</label>
+                        <label class="checkbox-label"><input type="checkbox" value="استشوار ومكواة"> استشوار ومكواة</label>
+                        <label class="checkbox-label"><input type="checkbox" value="تنظيف بشرة VIP"> تنظيف بشرة VIP</label>
+                        <label class="checkbox-label"><input type="checkbox" value="صبغة شعر"> صبغة شعر</label>
+                        <label class="checkbox-label"><input type="checkbox" value="كيرلي أو ويفي"> كيرلي أو ويفي</label>
+                    </div>
+
+                    <button id="btn-request" class="btn-whatsapp" onclick="window.requestBooking()">إرسال البيانات وفتح واتساب</button>
                 </div>
 
-                <button id="btn-request" class="btn-whatsapp" onclick="window.requestBooking()">تأكيد الحجز عبر واتساب</button>
+                <div id="confirm-whatsapp-container" class="hidden" style="background-color: #1a2e1a; padding: 20px; border-radius: 8px; border: 1px dashed var(--whatsapp); margin: 15px 0;">
+                    <p style="color: #c3e6cb; margin-top: 0; font-size: 1.05rem; font-weight: bold;">انتبه من فضلك! ⚠️</p>
+                    <p style="color: #fff; font-size: 0.95rem; line-height: 1.6;">تم فتح تطبيق الواتساب الآن. بعد إرسال الرسالة إلى الصالون، يرجى الضغط فوراً على الزر بالأسفل لتأكيد حجز مكانك رسمياً في طابور المحل الحية.</p>
+                    
+                    <button id="btn-final-confirm" onclick="window.confirmFinalBooking()" style="background-color: #4caf50; color: white; border: none; font-size: 1.1rem; padding: 14px;">
+                        اضغط هنا لتأكيد الدخول في الطابور بعد الإرسال
+                    </button>
+                    <span class="nav-link" onclick="window.location.reload()" style="font-size: 0.85rem; color: #ff8888; display: block; margin-top: 15px;">تعديل البيانات أو البدء مجدداً؟</span>
+                </div>
             </div>
         </div>
         
