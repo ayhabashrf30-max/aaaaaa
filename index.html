@@ -12,7 +12,6 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js";
         import { getDatabase, ref, set, push, onValue, remove, update } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-database.js";
-        import { getAuth, RecaptchaVerifier, signInWithPhoneNumber } from "https://www.gstatic.com/firebasejs/10.8.1/firebase-auth.js";
 
         const firebaseConfig = {
           apiKey: "AIzaSyDnKcbzlhszXnn2Xtt56Cxi-wxIRzlQuw0",
@@ -26,8 +25,6 @@
 
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
-        const auth = getAuth(app);
-        auth.languageCode = 'ar';
         
         const queueRef = ref(db, 'queue');
         const settingsRef = ref(db, 'settings');
@@ -35,8 +32,6 @@
         let currentUserId = localStorage.getItem('afandina_user_id');
         let localQueue = [];
         let lastKnownStatus = null;
-        let confirmationResult = null;
-        let pendingBookingData = null;
         let isShopOpen = true; 
 
         onValue(settingsRef, (snapshot) => {
@@ -93,15 +88,6 @@
             }
         }
 
-        // التعديل هنا: خلينا الـ Recaptcha ظاهر (normal)
-        function setupRecaptcha() {
-            if (!window.recaptchaVerifier) {
-                window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-                    'size': 'normal'
-                });
-            }
-        }
-
         window.requestBooking = function() {
             if (!isShopOpen) { alert('عذراً، المحل مغلق ولا يستقبل حجوزات الآن.'); return; }
 
@@ -116,7 +102,7 @@
             if(!/^\d{11}$/.test(phone)) { alert('رقم التليفون يجب أن يكون 11 رقماً ويبدأ بـ 01 !'); return; }
             if(selectedServices.length === 0) { alert('برجاء اختيار خدمة واحدة على الأقل'); return; }
             
-            // --- حتة التوفير (مفيش رسايل للزباين القدام) ---
+            // التحقق لو الزبون حاجز قبل كده
             const existingCustomer = localQueue.find(q => q.phone === phone);
             if(existingCustomer) {
                 currentUserId = existingCustomer.id;
@@ -125,70 +111,43 @@
                 checkCustomerStatus();
                 return;
             }
-            // ------------------
 
             const serviceString = selectedServices.join(' + ');
-            pendingBookingData = { name, phone, serviceString };
-            const formattedPhone = "+20" + phone.substring(1);
 
-            // استدعاء الـ Recaptcha
-            setupRecaptcha();
-            const appVerifier = window.recaptchaVerifier;
             const btn = document.getElementById('btn-request');
-            btn.innerText = 'أكمل اختبار (أنا لست روبوت) أولاً...';
+            btn.innerText = 'جاري التأكيد...';
             btn.disabled = true;
 
-            // بعد ما تضغط الزرار، المربع هيظهر، ولما تحله هيبعت الرسالة
-            appVerifier.verify().then(() => {
-                btn.innerText = 'جاري إرسال الرسالة...';
-                signInWithPhoneNumber(auth, formattedPhone, appVerifier)
-                    .then((result) => {
-                        confirmationResult = result;
-                        document.getElementById('step-1').classList.add('hidden');
-                        document.getElementById('closed-message').classList.add('hidden');
-                        document.getElementById('step-2').classList.remove('hidden');
-                    }).catch((error) => {
-                        console.error(error);
-                        alert('حدث خطأ في الإرسال! تأكد من الرقم وحاول مجدداً.');
-                        btn.innerText = 'تأكيد الحجز برقم الهاتف';
-                        btn.disabled = false;
-                        // إعادة تهيئة الـ Recaptcha لو حصل خطأ
-                        window.recaptchaVerifier.render().then(function(widgetId) {
-                            grecaptcha.reset(widgetId);
-                        });
-                    });
+            // تسجيل الزبون فوراً في الطابور على Firebase
+            const newCustomerRef = push(queueRef);
+            set(newCustomerRef, {
+                name: name,
+                phone: phone,
+                service: serviceString,
+                status: 'انتظار',
+                timestamp: Date.now()
+            }).then(() => {
+                currentUserId = newCustomerRef.key;
+                localStorage.setItem('afandina_user_id', currentUserId);
+                localStorage.setItem('afandina_phone', phone);
+                checkCustomerStatus();
+
+                // إرسال رسالة الواتساب
+                const targetWhatsAppNumber = "201091505674";
+                const messageBody = `👑 *طلب حجز جديد - صالون أفندينا* 👑\n\n` +
+                                    `👤 *الاسم:* ${name}\n` +
+                                    `📱 *رقم الهاتف:* ${phone}\n` +
+                                    `✂️ *الخدمات المطلوبة:* ${serviceString}\n\n` +
+                                    `✨ _تم التسجيل في الطابور بنجاح_ ✨`;
+                const encodedMessage = encodeURIComponent(messageBody);
+                const whatsappUrl = `https://wa.me/${targetWhatsAppNumber}?text=${encodedMessage}`;
+                window.open(whatsappUrl, '_blank');
+                
+                btn.innerText = 'تأكيد الحجز عبر واتساب';
+                btn.disabled = false;
             }).catch((error) => {
-                 // لو قفل المربع أو حصلت مشكلة في الاختبار
-                 btn.innerText = 'تأكيد الحجز برقم الهاتف';
-                 btn.disabled = false;
-            });
-        };
-
-        window.confirmOTP = function() {
-            const code = document.getElementById('otp-code').value.trim();
-            if(!code) { alert('الرجاء إدخال الكود'); return; }
-
-            const btn = document.getElementById('btn-confirm');
-            btn.innerText = 'جاري التحقق...';
-            btn.disabled = true;
-
-            confirmationResult.confirm(code).then((result) => {
-                const newCustomerRef = push(queueRef);
-                set(newCustomerRef, {
-                    name: pendingBookingData.name,
-                    phone: pendingBookingData.phone,
-                    service: pendingBookingData.serviceString,
-                    status: 'انتظار',
-                    timestamp: Date.now()
-                }).then(() => {
-                    currentUserId = newCustomerRef.key;
-                    localStorage.setItem('afandina_user_id', currentUserId);
-                    localStorage.setItem('afandina_phone', pendingBookingData.phone);
-                    checkCustomerStatus();
-                });
-            }).catch((error) => {
-                alert('الكود الذي أدخلته غير صحيح!');
-                btn.innerText = 'تأكيد الكود';
+                alert('حدث خطأ أثناء الحجز، برجاء المحاولة لاحقاً.');
+                btn.innerText = 'تأكيد الحجز عبر واتساب';
                 btn.disabled = false;
             });
         };
@@ -249,7 +208,6 @@
                 document.getElementById('booking-form').classList.remove('hidden');
                 document.getElementById('status-display').classList.add('hidden');
                 document.getElementById('step-1').classList.remove('hidden');
-                document.getElementById('step-2').classList.add('hidden');
                 currentUserId = null;
                 lastKnownStatus = null;
                 localStorage.removeItem('afandina_user_id');
@@ -345,7 +303,7 @@
     </script>
 
     <style>
-        :root { --gold: #d4af37; --dark: #121212; --gray: #2a2a2a; --text: #ffffff; }
+        :root { --gold: #d4af37; --dark: #121212; --gray: #2a2a2a; --text: #ffffff; --whatsapp: #25D366; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--dark); color: var(--text); margin: 0; padding: 0; text-align: center; }
         header { background-color: var(--gray); padding: 20px; border-bottom: 3px solid var(--gold); }
         h1 { color: var(--gold); margin: 0; font-size: 2.5rem; letter-spacing: 2px;}
@@ -363,6 +321,9 @@
         button:hover:not(:disabled) { background-color: #b5952f; transform: scale(0.98); }
         button:disabled { background-color: #555; cursor: not-allowed; color: #888; }
         
+        .btn-whatsapp { background-color: var(--whatsapp); color: white; }
+        .btn-whatsapp:hover:not(:disabled) { background-color: #20ba5a; }
+
         .hidden { display: none !important; }
         
         .status-box { padding: 20px; margin-top: 15px; border-radius: 8px; font-size: 1.5rem; font-weight: bold; transition: all 0.3s; }
@@ -397,9 +358,6 @@
         .gallery-item:hover { transform: scale(1.05); }
 
         footer { background-color: #0b0b0b; padding: 15px; font-size: 0.85rem; color: #777; border-top: 1px solid var(--gray); margin-top: 50px; font-family: monospace, sans-serif; letter-spacing: 1px;}
-        
-        /* إضافة صغيرة عشان تظبيط شكل الـ Recaptcha لو ظهر */
-        #recaptcha-container { display: flex; justify-content: center; margin: 15px 0; }
     </style>
 </head>
 <body>
@@ -433,16 +391,7 @@
                     <label class="checkbox-label"><input type="checkbox" value="كيرلي أو ويفي"> كيرلي أو ويفي</label>
                 </div>
 
-                <div id="recaptcha-container"></div>
-
-                <button id="btn-request" onclick="window.requestBooking()">تأكيد الحجز برقم الهاتف</button>
-            </div>
-
-            <div id="step-2" class="hidden">
-                <p style="color: var(--gold); margin-bottom: 5px;">تم إرسال كود من 6 أرقام إلى هاتفك</p>
-                <input type="number" id="otp-code" placeholder="أدخل الكود هنا (6 أرقام)" style="letter-spacing: 5px; font-size: 1.2rem;">
-                <button id="btn-confirm" onclick="window.confirmOTP()" style="background-color: #4caf50; color: white;">تأكيد الكود</button>
-                <span class="nav-link" onclick="window.location.reload()" style="font-size: 0.8rem; color: #aaa;">تغيير رقم التليفون؟</span>
+                <button id="btn-request" class="btn-whatsapp" onclick="window.requestBooking()">تأكيد الحجز عبر واتساب</button>
             </div>
         </div>
         
@@ -517,7 +466,7 @@
     </div>
 
     <footer>
-        Developed by Ehab Ashraf ©2026
+        Developed by Ehab Ashraf © 2026
     </footer>
 
 </body>
