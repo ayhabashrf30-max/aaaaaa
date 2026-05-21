@@ -93,10 +93,11 @@
             }
         }
 
+        // التعديل هنا: خلينا الـ Recaptcha ظاهر (normal)
         function setupRecaptcha() {
             if (!window.recaptchaVerifier) {
                 window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', {
-                    'size': 'invisible'
+                    'size': 'normal'
                 });
             }
         }
@@ -115,7 +116,7 @@
             if(!/^\d{11}$/.test(phone)) { alert('رقم التليفون يجب أن يكون 11 رقماً ويبدأ بـ 01 !'); return; }
             if(selectedServices.length === 0) { alert('برجاء اختيار خدمة واحدة على الأقل'); return; }
             
-            // --- حتة التوفير ---
+            // --- حتة التوفير (مفيش رسايل للزباين القدام) ---
             const existingCustomer = localQueue.find(q => q.phone === phone);
             if(existingCustomer) {
                 currentUserId = existingCustomer.id;
@@ -130,24 +131,37 @@
             pendingBookingData = { name, phone, serviceString };
             const formattedPhone = "+20" + phone.substring(1);
 
+            // استدعاء الـ Recaptcha
             setupRecaptcha();
             const appVerifier = window.recaptchaVerifier;
             const btn = document.getElementById('btn-request');
-            btn.innerText = 'جاري إرسال الرسالة...';
+            btn.innerText = 'أكمل اختبار (أنا لست روبوت) أولاً...';
             btn.disabled = true;
 
-            signInWithPhoneNumber(auth, formattedPhone, appVerifier)
-                .then((result) => {
-                    confirmationResult = result;
-                    document.getElementById('step-1').classList.add('hidden');
-                    document.getElementById('closed-message').classList.add('hidden');
-                    document.getElementById('step-2').classList.remove('hidden');
-                }).catch((error) => {
-                    console.error(error);
-                    alert('حدث خطأ في الإرسال! تأكد من الرقم وحاول مجدداً.');
-                    btn.innerText = 'تأكيد الحجز برقم الهاتف';
-                    btn.disabled = false;
-                });
+            // بعد ما تضغط الزرار، المربع هيظهر، ولما تحله هيبعت الرسالة
+            appVerifier.verify().then(() => {
+                btn.innerText = 'جاري إرسال الرسالة...';
+                signInWithPhoneNumber(auth, formattedPhone, appVerifier)
+                    .then((result) => {
+                        confirmationResult = result;
+                        document.getElementById('step-1').classList.add('hidden');
+                        document.getElementById('closed-message').classList.add('hidden');
+                        document.getElementById('step-2').classList.remove('hidden');
+                    }).catch((error) => {
+                        console.error(error);
+                        alert('حدث خطأ في الإرسال! تأكد من الرقم وحاول مجدداً.');
+                        btn.innerText = 'تأكيد الحجز برقم الهاتف';
+                        btn.disabled = false;
+                        // إعادة تهيئة الـ Recaptcha لو حصل خطأ
+                        window.recaptchaVerifier.render().then(function(widgetId) {
+                            grecaptcha.reset(widgetId);
+                        });
+                    });
+            }).catch((error) => {
+                 // لو قفل المربع أو حصلت مشكلة في الاختبار
+                 btn.innerText = 'تأكيد الحجز برقم الهاتف';
+                 btn.disabled = false;
+            });
         };
 
         window.confirmOTP = function() {
@@ -169,9 +183,7 @@
                 }).then(() => {
                     currentUserId = newCustomerRef.key;
                     localStorage.setItem('afandina_user_id', currentUserId);
-                    // --- حتة التوفير ---
                     localStorage.setItem('afandina_phone', pendingBookingData.phone);
-                    // ------------------
                     checkCustomerStatus();
                 });
             }).catch((error) => {
@@ -385,6 +397,9 @@
         .gallery-item:hover { transform: scale(1.05); }
 
         footer { background-color: #0b0b0b; padding: 15px; font-size: 0.85rem; color: #777; border-top: 1px solid var(--gray); margin-top: 50px; font-family: monospace, sans-serif; letter-spacing: 1px;}
+        
+        /* إضافة صغيرة عشان تظبيط شكل الـ Recaptcha لو ظهر */
+        #recaptcha-container { display: flex; justify-content: center; margin: 15px 0; }
     </style>
 </head>
 <body>
@@ -400,8 +415,6 @@
         <h2>احجز دورك الآن</h2>
         
         <div id="booking-form">
-            <div id="recaptcha-container"></div>
-
             <div id="closed-message" class="shop-closed-banner hidden">
                 عذراً، المحل لا يستقبل حجوزات جديدة حالياً.<br>
                 <small style="font-size: 0.85rem; color: #aaa;">يمكنك القدوم مباشرة للمحل أو المحاولة لاحقاً.</small>
@@ -419,6 +432,8 @@
                     <label class="checkbox-label"><input type="checkbox" value="صبغة شعر"> صبغة شعر</label>
                     <label class="checkbox-label"><input type="checkbox" value="كيرلي أو ويفي"> كيرلي أو ويفي</label>
                 </div>
+
+                <div id="recaptcha-container"></div>
 
                 <button id="btn-request" onclick="window.requestBooking()">تأكيد الحجز برقم الهاتف</button>
             </div>
